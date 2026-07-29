@@ -1,11 +1,7 @@
-<<<<<<< HEAD
-node_modules
-=======
-venv/
 __pycache__/
-*.db
-*.sqlite3
-uploads/
->>>>>>> cea7875 (Add backend PDF processing and database modules)
-
+*.pyc
 extracted_outputs/
+uploads/
+*.db
+*.faiss
+.venv/

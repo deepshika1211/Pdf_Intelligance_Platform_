@@ -1,51 +1,59 @@
-from database import SessionLocal, PDFMetadata
+from database import SessionLocal
+from models import Document, DocumentChunk
 
-# 1. CREATE: Add new PDF metadata record to DB
-def create_pdf_record(filename, total_pages, title=None, author=None):
+def create_document_record(filename: str, total_pages: int, title: str = None, author: str = None, chunks: list[str] = None):
     db = SessionLocal()
-    db_record = PDFMetadata(
-        filename=filename,
-        total_pages=total_pages,
-        title=title,
-        author=author
-    )
-    db.add(db_record)
-    db.commit()
-    db.refresh(db_record)
-    db.close()
-    print(f" Record saved to database with ID: {db_record.id}")
-    return db_record
-
-# 2. READ: Get all PDF records from DB
-def get_all_pdf_records():
-    db = SessionLocal()
-    records = db.query(PDFMetadata).all()
-    db.close()
-    return records
-
-# 3. DELETE: Remove a PDF record by ID
-def delete_pdf_record(record_id):
-    db = SessionLocal()
-    record = db.query(PDFMetadata).filter(PDFMetadata.id == record_id).first()
-    if record:
-        db.delete(record)
+    try:
+        # Create Document record
+        doc = Document(
+            filename=filename,
+            total_pages=total_pages,
+            title=title,
+            author=author
+        )
+        db.add(doc)
         db.commit()
-        db.close()
-        print(f" Record ID {record_id} deleted.")
-        return True
-    db.close()
-    print(f" Record ID {record_id} not found.")
-    return False
+        db.refresh(doc)
 
-# Quick Test Run
-if __name__ == "__main__":
-    print("\n--- Testing CRUD Operations ---")
-    
-    # Test Create
-    new_rec = create_pdf_record(filename="sample.pdf", total_pages=4, title="file.pdf", author="Abdul")
-    
-    # Test Read
-    all_recs = get_all_pdf_records()
-    print(f"\nTotal Records in Database: {len(all_recs)}")
-    for r in all_recs:
-        print(f"ID: {r.id} | File: {r.filename} | Pages: {r.total_pages} | Title: {r.title}")
+        # Save Text Chunks associated with this Document
+        if chunks:
+            for idx, chunk_text in enumerate(chunks):
+                chunk_record = DocumentChunk(
+                    document_id=doc.id,
+                    chunk_index=idx,
+                    chunk_text=chunk_text
+                )
+                db.add(chunk_record)
+            db.commit()
+
+        print(f" Document saved with ID: {doc.id} ({len(chunks or [])} chunks linked)")
+        return doc
+    finally:
+        db.close()
+
+def get_all_documents():
+    db = SessionLocal()
+    try:
+        return db.query(Document).all()
+    finally:
+        db.close()
+
+def get_document_by_id(doc_id: int):
+    db = SessionLocal()
+    try:
+        return db.query(Document).filter(Document.id == doc_id).first()
+    finally:
+        db.close()
+
+def delete_document_record(doc_id: int):
+    db = SessionLocal()
+    try:
+        doc = db.query(Document).filter(Document.id == doc_id).first()
+        if doc:
+            db.delete(doc)
+            db.commit()
+            print(f" Document ID {doc_id} deleted successfully.")
+            return True
+        return False
+    finally:
+        db.close()
