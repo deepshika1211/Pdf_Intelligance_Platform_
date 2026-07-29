@@ -7,6 +7,7 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Badge } from '../components/Badge';
 import confetti from 'canvas-confetti';
+import { uploadAPI } from '../utils/api';
 import {
   UploadCloud,
   FileText,
@@ -35,6 +36,7 @@ export const Upload = () => {
   const [currentFile, setCurrentFile] = useState(null);
   const [addedPdfObj, setAddedPdfObj] = useState(null);
   const [uploadedHistory, setUploadedHistory] = useState([]);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -59,7 +61,7 @@ export const Upload = () => {
     }
   };
 
-  const processFile = (file) => {
+  const processFile = async (file) => {
     if (!file.name.endsWith('.pdf')) {
       addToast('Please select a valid PDF document file (.pdf)', 'error');
       return;
@@ -68,46 +70,50 @@ export const Upload = () => {
     setCurrentFile(file);
     setUploadState('uploading');
     setProgress(0);
+    setErrorMsg('');
 
-    // Simulate chunked upload progress
-    let current = 0;
-    const interval = setInterval(() => {
-      current += Math.floor(Math.random() * 20) + 10;
-      if (current >= 100) {
-        current = 100;
-        clearInterval(interval);
-        setProgress(100);
+    try {
+      // Real upload to FastAPI with progress tracking
+      const res = await uploadAPI.uploadPdf(file, (progressEvent) => {
+        if (progressEvent.total) {
+          const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+          setProgress(pct);
+        }
+      });
 
-        // Add to PDF Context
-        setTimeout(() => {
-          const newPdf = addPdf({
-            name: file.name,
-            size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-            sizeBytes: file.size,
-            pages: Math.floor(Math.random() * 25) + 10,
-            category: 'Uploads',
-            tags: ['User File', 'OCR Parsed'],
-          });
+      const data = res.data;
+      setProgress(100);
 
-          setAddedPdfObj(newPdf);
-          setUploadedHistory((prev) => [newPdf, ...prev]);
-          setUploadState('success');
-          addToast(`Successfully processed "${file.name}"`, 'success');
+      // Build PDF object using real backend data
+      const newPdf = addPdf({
+        dbId: data.document_id,
+        name: data.filename,
+        size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+        sizeBytes: file.size,
+        pages: data.total_pages,
+        category: 'Uploads',
+        tags: ['User Upload', 'AI Indexed', `${data.text_chunks_count} Chunks`],
+        summary: `${data.total_pages} pages indexed. ${data.text_chunks_count} text chunks embedded. ${data.tables_found_count} tables found.`,
+      });
 
-          // Trigger Confetti!
-          try {
-            confetti({
-              particleCount: 80,
-              spread: 70,
-              origin: { y: 0.6 }
-            });
-          } catch (e) {}
-        }, 400);
-      } else {
-        setProgress(current);
-      }
-    }, 250);
+      setAddedPdfObj(newPdf);
+      setUploadedHistory((prev) => [newPdf, ...prev]);
+      setUploadState('success');
+      addToast(`Successfully processed "${data.filename}" — ${data.total_pages} pages indexed!`, 'success');
+
+      // Trigger confetti!
+      try {
+        confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
+      } catch (e) {}
+
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || 'Upload failed. Is FastAPI running?';
+      setErrorMsg(msg);
+      setUploadState('error');
+      addToast(`Upload failed: ${msg}`, 'error');
+    }
   };
+
 
   const resetUpload = () => {
     setUploadState('idle');

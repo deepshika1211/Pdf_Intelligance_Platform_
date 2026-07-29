@@ -14,10 +14,18 @@ import { Library } from './pages/Library';
 import { Upload } from './pages/Upload';
 import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
+import { LoadingSpinner } from './components/Loader';
 
 // Protected Route Guard
 const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <LoadingSpinner size="lg" />
+      </div>
+    );
+  }
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
   }

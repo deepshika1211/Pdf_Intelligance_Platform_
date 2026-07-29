@@ -1,28 +1,43 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../components/Toast';
 import { Button } from '../components/Button';
 import { Sparkles, Mail, Lock, User, CheckCircle2, ShieldCheck, ArrowRight } from 'lucide-react';
 
 export const Register = () => {
   const [fullName, setFullName] = useState('Aiden Morgan');
   const [email, setEmail] = useState('aiden.morgan@gmail.com');
-  const [password, setPassword] = useState('••••••••••••');
-  const [confirmPassword, setConfirmPassword] = useState('••••••••••••');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
   const { register } = useAuth();
+  const { addToast } = useToast();
   const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!password || !confirmPassword) {
+      addToast('Please fill in both password fields', 'error');
+      return;
+    }
+    if (password !== confirmPassword) {
+      addToast('Passwords do not match', 'error');
+      return;
+    }
     setIsLoading(true);
-    setTimeout(() => {
-      register(fullName, email);
-      setIsLoading(false);
+    try {
+      await register(fullName, email, password);
+      addToast('Account created successfully!', 'success');
       navigate('/');
-    }, 800);
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || 'Registration failed. Please try again.';
+      addToast(msg, 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (

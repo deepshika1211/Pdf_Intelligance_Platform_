@@ -1,27 +1,38 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../components/Toast';
 import { Button } from '../components/Button';
 import { Sparkles, Mail, Lock, ArrowRight, CheckCircle2, ShieldCheck, Zap, Layers } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export const Login = () => {
   const [email, setEmail] = useState('aiden.morgan@gmail.com');
-  const [password, setPassword] = useState('••••••••••••');
+  const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
   const { login } = useAuth();
+  const { addToast } = useToast();
   const navigate = useNavigate();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!password) {
+      addToast('Please enter your password', 'error');
+      return;
+    }
     setIsLoading(true);
-    setTimeout(() => {
-      login(email, password);
-      setIsLoading(false);
+    try {
+      await login(email, password);
+      addToast('Signed in successfully!', 'success');
       navigate('/');
-    }, 800);
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || 'Login failed. Please check your credentials.';
+      addToast(msg, 'error');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
