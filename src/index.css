@@ -53,7 +53,7 @@
   position: absolute;
   top: -1px; bottom: -1px;
   left: -1px; right: -1px;
-  background: linear-gradient(to right, #FE5D26, #F2C078, #C1DBB3);
+  background: linear-gradient(to right, #A5AF79, #827148, #E8A07C);
   border-radius: inherit;
   z-index: -1;
 }
