@@ -9,5 +9,15 @@ export default defineConfig({
     allowedHosts: true,
     port: 3000,
     open: false
-  }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          ui: ['framer-motion', 'lucide-react', 'recharts', 'canvas-confetti'],
+        },
+      },
+    },
+  },
 })

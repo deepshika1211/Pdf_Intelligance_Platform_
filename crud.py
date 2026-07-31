@@ -1,49 +1,61 @@
 """
 crud.py — Database CRUD Operations
 All database read/write operations for Users and Documents.
+Supports both FastAPI dependency injection (passing db: Session) and standalone calls.
 """
+from typing import Optional
+from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import Document, DocumentChunk, User
+
+
+def _get_session(db: Optional[Session]) -> tuple[Session, bool]:
+    if db is not None:
+        return db, False
+    return SessionLocal(), True
 
 
 # ---------------------------------------------------------------------------
 # User CRUD
 # ---------------------------------------------------------------------------
 
-def get_user_by_email(email: str):
+def get_user_by_email(email: str, db: Optional[Session] = None):
     """Fetches a User record by email address."""
-    db = SessionLocal()
+    session, owns_session = _get_session(db)
     try:
-        return db.query(User).filter(User.email == email).first()
+        return session.query(User).filter(User.email == email).first()
     finally:
-        db.close()
+        if owns_session:
+            session.close()
 
 
-def get_user_by_username(username: str):
+def get_user_by_username(username: str, db: Optional[Session] = None):
     """Fetches a User record by username."""
-    db = SessionLocal()
+    session, owns_session = _get_session(db)
     try:
-        return db.query(User).filter(User.username == username).first()
+        return session.query(User).filter(User.username == username).first()
     finally:
-        db.close()
+        if owns_session:
+            session.close()
 
 
-def create_user(username: str, email: str, hashed_password: str):
+def create_user(username: str, email: str, hashed_password: str, db: Optional[Session] = None):
     """Creates and persists a new User record with a bcrypt-hashed password."""
-    db = SessionLocal()
+    session, owns_session = _get_session(db)
     try:
         user = User(
             username=username,
             email=email,
             hashed_password=hashed_password,
         )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
         print(f" New user created: {email} (id={user.id})")
         return user
     finally:
-        db.close()
+        if owns_session:
+            session.close()
 
 
 # ---------------------------------------------------------------------------
@@ -51,15 +63,14 @@ def create_user(username: str, email: str, hashed_password: str):
 # ---------------------------------------------------------------------------
 
 def create_document_record(filename: str, total_pages: int, title: str = None,
-                            author: str = None, chunks: list[str] = None,
-                            user_email: str = None):
-    """Creates a Document record + linked DocumentChunks. Optionally links to a User."""
-    db = SessionLocal()
+                            author: str = None, chunks: list[dict] | list[str] = None,
+                            user_email: str = None, db: Optional[Session] = None):
+    """Creates a Document record + linked DocumentChunks. Uses bulk insertion."""
+    session, owns_session = _get_session(db)
     try:
-        # Resolve user_id from email if provided
         user_id = None
         if user_email:
-            user = db.query(User).filter(User.email == user_email).first()
+            user = session.query(User).filter(User.email == user_email).first()
             if user:
                 user_id = user.id
 
@@ -70,34 +81,39 @@ def create_document_record(filename: str, total_pages: int, title: str = None,
             author=author,
             user_id=user_id,
         )
-        db.add(doc)
-        db.commit()
-        db.refresh(doc)
+        session.add(doc)
+        session.commit()
+        session.refresh(doc)
 
-        # Save text chunks linked to this document
+        # Save text chunks using bulk insert (add_all)
         if chunks:
-            for idx, chunk_text in enumerate(chunks):
-                chunk_record = DocumentChunk(
-                    document_id=doc.id,
-                    chunk_index=idx,
-                    chunk_text=chunk_text,
+            chunk_records = []
+            for idx, chunk_item in enumerate(chunks):
+                text_content = chunk_item.get("text", chunk_item) if isinstance(chunk_item, dict) else chunk_item
+                chunk_records.append(
+                    DocumentChunk(
+                        document_id=doc.id,
+                        chunk_index=idx,
+                        chunk_text=text_content,
+                    )
                 )
-                db.add(chunk_record)
-            db.commit()
+            session.add_all(chunk_records)
+            session.commit()
 
         print(f" Document saved with ID: {doc.id} ({len(chunks or [])} chunks linked)")
         return doc
     finally:
-        db.close()
+        if owns_session:
+            session.close()
 
 
-def get_all_documents(user_email: str = None):
+def get_all_documents(user_email: str = None, db: Optional[Session] = None):
     """Returns all documents, optionally filtered by owner email."""
-    db = SessionLocal()
+    session, owns_session = _get_session(db)
     try:
-        query = db.query(Document)
+        query = session.query(Document)
         if user_email:
-            user = db.query(User).filter(User.email == user_email).first()
+            user = session.query(User).filter(User.email == user_email).first()
             if user:
                 query = query.filter(Document.user_id == user.id)
         docs = query.order_by(Document.upload_time.desc()).all()
@@ -114,14 +130,15 @@ def get_all_documents(user_email: str = None):
             for d in docs
         ]
     finally:
-        db.close()
+        if owns_session:
+            session.close()
 
 
-def get_document_by_id(doc_id: int):
+def get_document_by_id(doc_id: int, db: Optional[Session] = None):
     """Fetches a single Document by its primary key."""
-    db = SessionLocal()
+    session, owns_session = _get_session(db)
     try:
-        doc = db.query(Document).filter(Document.id == doc_id).first()
+        doc = session.query(Document).filter(Document.id == doc_id).first()
         if not doc:
             return None
         return {
@@ -131,37 +148,46 @@ def get_document_by_id(doc_id: int):
             "title": doc.title,
             "author": doc.author,
             "upload_time": doc.upload_time.isoformat() if doc.upload_time else None,
+            "user_id": doc.user_id,
             "chunks_count": len(doc.chunks),
         }
     finally:
-        db.close()
+        if owns_session:
+            session.close()
 
 
-def get_document_chunks(doc_id: int):
+def get_document_chunks(doc_id: int, db: Optional[Session] = None):
     """Returns all text chunks for a given document, ordered by index."""
-    db = SessionLocal()
+    session, owns_session = _get_session(db)
     try:
         chunks = (
-            db.query(DocumentChunk)
+            session.query(DocumentChunk)
             .filter(DocumentChunk.document_id == doc_id)
             .order_by(DocumentChunk.chunk_index)
             .all()
         )
         return [{"chunk_index": c.chunk_index, "chunk_text": c.chunk_text} for c in chunks]
     finally:
-        db.close()
+        if owns_session:
+            session.close()
 
 
-def delete_document_record(doc_id: int) -> bool:
-    """Deletes a document and all its associated chunks (cascade)."""
-    db = SessionLocal()
+def delete_document_record(doc_id: int, db: Optional[Session] = None) -> Optional[dict]:
+    """Deletes a document and all associated chunks. Returns deleted record details for cleanup."""
+    session, owns_session = _get_session(db)
     try:
-        doc = db.query(Document).filter(Document.id == doc_id).first()
+        doc = session.query(Document).filter(Document.id == doc_id).first()
         if doc:
-            db.delete(doc)
-            db.commit()
-            print(f" Document ID {doc_id} deleted successfully.")
-            return True
-        return False
+            doc_data = {
+                "id": doc.id,
+                "filename": doc.filename,
+                "user_id": doc.user_id,
+            }
+            session.delete(doc)
+            session.commit()
+            print(f" Document ID {doc_id} deleted from DB successfully.")
+            return doc_data
+        return None
     finally:
-        db.close()
+        if owns_session:
+            session.close()
