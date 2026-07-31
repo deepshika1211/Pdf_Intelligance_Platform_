@@ -36,8 +36,8 @@ from auth import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
 )
 
-# Gemini AI
-from google import genai
+# Groq AI (via requests — no extra package needed)
+import requests as http_requests
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -64,14 +64,13 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Gemini AI Setup
+# Groq AI Setup
 # ---------------------------------------------------------------------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+if GROQ_API_KEY:
+    print("[INFO] Groq AI enabled with llama-3.3-70b-versatile model.")
 else:
-    gemini_client = None
-    print("[WARNING] GEMINI_API_KEY not set. Chat will use fallback mode.")
+    print("[WARNING] GROQ_API_KEY not set. Chat will use fallback mode.")
 
 # ---------------------------------------------------------------------------
 # Initialize DB + Vector Store
@@ -303,8 +302,8 @@ def chat_with_pdf(
 
     context = "\n\n".join(context_parts) if context_parts else "No relevant document context found."
 
-    # Step 3: Generate answer with Gemini AI
-    if gemini_client and GEMINI_API_KEY:
+    # Step 3: Generate answer with Groq AI
+    if GROQ_API_KEY:
         prompt = f"""You are an expert PDF document analyst assistant. Answer the user's question using ONLY the provided document context below. Be precise, cite page numbers when available, and format your response clearly.
 
 === DOCUMENT CONTEXT ===
@@ -323,11 +322,22 @@ def chat_with_pdf(
 === ANSWER ==="""
 
         try:
-            response = gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
+            groq_response = http_requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1024,
+                    "temperature": 0.3,
+                },
+                timeout=30,
             )
-            answer_text = response.text
+            groq_response.raise_for_status()
+            answer_text = groq_response.json()["choices"][0]["message"]["content"]
         except Exception as e:
             answer_text = f"AI generation error: {str(e)}. Context retrieved: {context[:500]}..."
     else:
