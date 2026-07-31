@@ -143,6 +143,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         "user": {
             "id": user.id,
             "username": user.username,
+            "name": user.username,
             "email": user.email,
         },
     }
@@ -170,6 +171,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         "user": {
             "id": user.id,
             "username": user.username,
+            "name": user.username,
             "email": user.email,
         },
     }
@@ -184,6 +186,7 @@ def get_me(current_user_email: str = Depends(get_current_user_required), db: Ses
     return {
         "id": user.id,
         "username": user.username,
+        "name": user.username,
         "email": user.email,
         "created_at": user.created_at.isoformat() if user.created_at else None,
     }
