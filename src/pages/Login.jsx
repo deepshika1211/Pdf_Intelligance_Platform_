@@ -7,7 +7,7 @@ import { Sparkles, Mail, Lock, ArrowRight, CheckCircle2, ShieldCheck, Zap, Layer
 import { motion } from 'framer-motion';
 
 export const Login = () => {
-  const [email, setEmail] = useState('aiden.morgan@gmail.com');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -28,7 +28,14 @@ export const Login = () => {
       addToast('Signed in successfully!', 'success');
       navigate('/');
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || 'Login failed. Please check your credentials.';
+      let msg = err.response?.data?.detail;
+      if (!msg) {
+        if (err.message === 'Network Error' || err.code === 'ERR_NETWORK') {
+          msg = 'Backend server is offline! Please run "python main.py" in terminal.';
+        } else {
+          msg = err.message || 'Login failed. Please check your credentials.';
+        }
+      }
       addToast(msg, 'error');
     } finally {
       setIsLoading(false);
@@ -232,9 +239,10 @@ export const Login = () => {
           {/* Social Logins */}
           <div className="grid grid-cols-2 gap-3">
             <button
+              type="button"
               onClick={() => {
-                login('aiden.morgan@gmail.com');
-                navigate('/');
+                addToast('Google OAuth is not set up. Please register with email.', 'info');
+                navigate('/register');
               }}
               className="flex items-center justify-center space-x-2 py-2.5 px-4 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs font-semibold text-slate-200 transition-colors"
             >
@@ -248,9 +256,10 @@ export const Login = () => {
             </button>
 
             <button
+              type="button"
               onClick={() => {
-                login('github.user@company.com');
-                navigate('/');
+                addToast('GitHub OAuth is not set up. Please register with email.', 'info');
+                navigate('/register');
               }}
               className="flex items-center justify-center space-x-2 py-2.5 px-4 bg-slate-800/80 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs font-semibold text-slate-200 transition-colors"
             >

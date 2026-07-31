@@ -6,8 +6,8 @@ import { Button } from '../components/Button';
 import { Sparkles, Mail, Lock, User, CheckCircle2, ShieldCheck, ArrowRight } from 'lucide-react';
 
 export const Register = () => {
-  const [fullName, setFullName] = useState('Aiden Morgan');
-  const [email, setEmail] = useState('aiden.morgan@gmail.com');
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(true);
@@ -33,7 +33,14 @@ export const Register = () => {
       addToast('Account created successfully!', 'success');
       navigate('/');
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || 'Registration failed. Please try again.';
+      let msg = err.response?.data?.detail;
+      if (!msg) {
+        if (err.message === 'Network Error' || err.code === 'ERR_NETWORK') {
+          msg = 'Backend server is offline! Please run "python main.py" in terminal.';
+        } else {
+          msg = err.message || 'Registration failed. Please try again.';
+        }
+      }
       addToast(msg, 'error');
     } finally {
       setIsLoading(false);

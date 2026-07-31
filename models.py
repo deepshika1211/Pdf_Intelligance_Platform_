@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 from database import Base
 
 class User(Base):
@@ -10,7 +10,7 @@ class User(Base):
     username = Column(String(100), unique=True, nullable=False)
     email = Column(String(150), unique=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     documents = relationship("Document", back_populates="owner")
 
@@ -22,7 +22,7 @@ class Document(Base):
     total_pages = Column(Integer, nullable=False)
     title = Column(String(255), nullable=True)
     author = Column(String(255), nullable=True)
-    upload_time = Column(DateTime, default=datetime.utcnow)
+    upload_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Optional Foreign Key for user ownership
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)

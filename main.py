@@ -10,6 +10,10 @@ Complete backend with:
 import os
 import shutil
 from datetime import timedelta
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,7 +35,7 @@ from auth import (
 )
 
 # Gemini AI
-import google.generativeai as genai
+from google import genai
 
 # ---------------------------------------------------------------------------
 # App Setup
@@ -62,11 +66,10 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    gemini_model = None
-    print("⚠️  GEMINI_API_KEY not set. Chat will use fallback mode.")
+    gemini_client = None
+    print("[WARNING] GEMINI_API_KEY not set. Chat will use fallback mode.")
 
 # ---------------------------------------------------------------------------
 # Initialize DB + Vector Store
@@ -274,7 +277,7 @@ async def chat_with_pdf(req: ChatRequest):
     context = "\n\n".join(context_parts) if context_parts else "No relevant document context found."
 
     # Step 3: Generate answer with Gemini AI
-    if gemini_model and GEMINI_API_KEY:
+    if gemini_client and GEMINI_API_KEY:
         prompt = f"""You are an expert PDF document analyst assistant. Answer the user's question using ONLY the provided document context below. Be precise, cite page numbers when available, and format your response clearly.
 
 === DOCUMENT CONTEXT ===
@@ -293,7 +296,10 @@ async def chat_with_pdf(req: ChatRequest):
 === ANSWER ==="""
 
         try:
-            response = gemini_model.generate_content(prompt)
+            response = gemini_client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+            )
             answer_text = response.text
         except Exception as e:
             answer_text = f"AI generation error: {str(e)}. Context retrieved: {context[:500]}..."
@@ -372,6 +378,28 @@ def delete_document(doc_id: int):
 # ===========================================================================
 # Health Check
 # ===========================================================================
+
+@app.get("/", summary="API root")
+def root():
+    return {
+        "name": "PDF Intelligence Platform API",
+        "version": "2.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "endpoints": [
+            "POST /auth/register",
+            "POST /auth/login",
+            "GET  /auth/me",
+            "POST /upload-pdf/",
+            "POST /chat/",
+            "GET  /search/",
+            "GET  /documents/",
+            "GET  /documents/{doc_id}",
+            "DELETE /documents/{doc_id}",
+            "GET  /health",
+        ],
+    }
+
 
 @app.get("/health", summary="API health check")
 def health_check():
