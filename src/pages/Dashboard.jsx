@@ -66,7 +66,7 @@ export const Dashboard = () => {
               <span>AI Engine Connected • Dense Retrieval Active</span>
             </div>
             <h1 className="text-2xl sm:text-4xl font-extrabold tracking-tight">
-              Welcome back, {user?.name.split(' ')[0]} 👋
+              Welcome back, {(user?.name || user?.username || '').split(' ')[0]} 👋
             </h1>
             <p className="text-slate-200 text-sm leading-relaxed">
               Your document repository is synced. You have <strong>{stats.totalPdfs} PDFs</strong> ({stats.totalPages} pages) indexed and ready for AI document analysis.
