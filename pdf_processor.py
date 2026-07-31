@@ -1,21 +1,27 @@
 import fitz  # PyMuPDF
 import os
 
-def chunk_text(text: str, chunk_size: int = 500, chunk_overlap: int = 50) -> list[str]:
-    """Splits text into overlapping chunks for vector embedding."""
+def chunk_text_with_pages(pages_data: list[dict], chunk_size: int = 500, chunk_overlap: int = 50) -> list[dict]:
+    """Splits text into overlapping chunks, preserving exact page numbers."""
     chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        start += chunk_size - chunk_overlap
+    for item in pages_data:
+        page_num = item["page"]
+        text = item["text"]
+        if not text.strip():
+            continue
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            chunk = text[start:end].strip()
+            if chunk:
+                chunks.append({"text": chunk, "page": page_num})
+            start += chunk_size - chunk_overlap
     return chunks
+
 
 def extract_embedded_images(doc, output_dir: str = "extracted_images") -> list[str]:
     """
-    FR-17: Extracts actual embedded images from PDF pages.
+    Extracts actual embedded images from PDF pages.
     """
     os.makedirs(output_dir, exist_ok=True)
     saved_image_paths = []
@@ -40,6 +46,7 @@ def extract_embedded_images(doc, output_dir: str = "extracted_images") -> list[s
 
     return saved_image_paths
 
+
 def extract_pdf_data(pdf_path: str, output_dir: str = "extracted_outputs"):
     os.makedirs(output_dir, exist_ok=True)
     doc = fitz.open(pdf_path)
@@ -54,6 +61,7 @@ def extract_pdf_data(pdf_path: str, output_dir: str = "extracted_outputs"):
 
     page_screenshots = []
     extracted_tables = []
+    pages_data = []
     full_text = ""
 
     # 2. Page-by-Page Extraction
@@ -64,6 +72,7 @@ def extract_pdf_data(pdf_path: str, output_dir: str = "extracted_outputs"):
         page_text = page.get_text("text")
         if page_text.strip():
             full_text += f"\n--- Page {page_num + 1} ---\n" + page_text
+            pages_data.append({"page": page_num + 1, "text": page_text})
 
         # Page Snapshot Screenshot
         pix = page.get_pixmap()
@@ -71,7 +80,7 @@ def extract_pdf_data(pdf_path: str, output_dir: str = "extracted_outputs"):
         pix.save(screenshot_path)
         page_screenshots.append(screenshot_path)
 
-        # FR-16 Table Extraction
+        # Table Extraction
         tabs = page.find_tables()
         if tabs.tables:
             for table_idx, tab in enumerate(tabs):
@@ -83,18 +92,19 @@ def extract_pdf_data(pdf_path: str, output_dir: str = "extracted_outputs"):
                     "data": table_data
                 })
 
-    # 3. FR-17 Embedded Images Extraction
+    # 3. Embedded Images Extraction
     images_dir = os.path.join(output_dir, "images")
     embedded_images = extract_embedded_images(doc, output_dir=images_dir)
 
     doc.close()
 
-    # 4. Text Chunking
-    text_chunks = chunk_text(full_text)
+    # 4. Page-Aware Text Chunking
+    chunks_with_pages = chunk_text_with_pages(pages_data)
+    text_chunks = [c["text"] for c in chunks_with_pages]
 
     print(f"\n--- EXTRACTION SUMMARY ---")
     print(f"Total Text Characters: {len(full_text)}")
-    print(f"Text Chunks Created: {len(text_chunks)}")
+    print(f"Text Chunks Created: {len(chunks_with_pages)}")
     print(f"Page Screenshots Saved: {len(page_screenshots)}")
     print(f"Embedded Images Extracted: {len(embedded_images)}")
     print(f"Tables Found: {len(extracted_tables)}")
@@ -103,6 +113,7 @@ def extract_pdf_data(pdf_path: str, output_dir: str = "extracted_outputs"):
         "metadata": metadata,
         "full_text": full_text,
         "text_chunks": text_chunks,
+        "chunks_with_pages": chunks_with_pages,
         "page_screenshots": page_screenshots,
         "embedded_images": embedded_images,
         "tables": extracted_tables

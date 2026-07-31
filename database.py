@@ -19,5 +19,13 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     print(" Database tables (Users, Documents, DocumentChunks) created successfully!")
 
+def get_db():
+    """FastAPI dependency for yielding database sessions per request."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
 if __name__ == "__main__":
     init_db()

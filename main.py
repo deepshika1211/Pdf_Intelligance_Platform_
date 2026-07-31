@@ -9,6 +9,7 @@ Complete backend with:
 """
 import os
 import shutil
+from uuid import uuid4
 from datetime import timedelta
 from dotenv import load_dotenv
 
@@ -17,10 +18,11 @@ load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.orm import Session
 
 # Custom modules
-from database import init_db
+from database import init_db, get_db
 from pdf_processor import extract_pdf_data
 from vector_store import VectorStore
 from crud import (
@@ -76,6 +78,7 @@ else:
 # ---------------------------------------------------------------------------
 init_db()
 vstore = VectorStore()
+vstore.load_index()
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -86,9 +89,9 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # ===========================================================================
 
 class RegisterRequest(BaseModel):
-    username: str
+    username: str = Field(..., min_length=3, max_length=50)
     email: str
-    password: str
+    password: str = Field(..., min_length=6)
 
 
 class LoginRequest(BaseModel):
@@ -106,19 +109,17 @@ class ChatRequest(BaseModel):
 # ===========================================================================
 
 @app.post("/auth/register", summary="Register a new user account")
-def register(req: RegisterRequest):
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
     """
     Creates a new user account with a bcrypt-hashed password.
     Returns a JWT access token on success.
     """
-    # Check if email already registered
-    if get_user_by_email(req.email):
+    if get_user_by_email(req.email, db=db):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists.",
         )
-    # Check if username taken
-    if get_user_by_username(req.username):
+    if get_user_by_username(req.username, db=db):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This username is already taken.",
@@ -129,6 +130,7 @@ def register(req: RegisterRequest):
         username=req.username,
         email=req.email,
         hashed_password=hashed,
+        db=db,
     )
 
     token = create_access_token(
@@ -147,11 +149,11 @@ def register(req: RegisterRequest):
 
 
 @app.post("/auth/login", summary="Login and receive JWT token")
-def login(req: LoginRequest):
+def login(req: LoginRequest, db: Session = Depends(get_db)):
     """
     Validates credentials and returns a JWT access token.
     """
-    user = get_user_by_email(req.email)
+    user = get_user_by_email(req.email, db=db)
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -174,9 +176,9 @@ def login(req: LoginRequest):
 
 
 @app.get("/auth/me", summary="Get current authenticated user info")
-def get_me(current_user_email: str = Depends(get_current_user_required)):
+def get_me(current_user_email: str = Depends(get_current_user_required), db: Session = Depends(get_db)):
     """Returns the profile of the currently authenticated user."""
-    user = get_user_by_email(current_user_email)
+    user = get_user_by_email(current_user_email, db=db)
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     return {
@@ -192,51 +194,58 @@ def get_me(current_user_email: str = Depends(get_current_user_required)):
 # ===========================================================================
 
 @app.post("/upload-pdf/", summary="Upload, process, and index a PDF document")
-async def upload_pdf(
+def upload_pdf(
     file: UploadFile = File(...),
     current_user_email: str = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
 ):
     """
-    Full pipeline:
-    1. Save uploaded PDF to disk
-    2. Extract text, images, and tables via PyMuPDF
-    3. Chunk text and generate FAISS vector embeddings (Sentence Transformers)
-    4. Persist metadata and chunks to SQLite database
+    Full pipeline (runs in worker threadpool):
+    1. Sanitize filename to prevent Path Traversal
+    2. Save uploaded PDF to disk
+    3. Extract text, images, and tables via PyMuPDF
+    4. Chunk text with exact page numbers and generate FAISS vector embeddings
+    5. Persist metadata and chunks to database
     """
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    # A. Save PDF to disk
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    # A. Sanitize filename using basename + UUID to prevent Path Traversal
+    raw_basename = os.path.basename(file.filename)
+    safe_filename = f"{uuid4().hex[:8]}_{raw_basename}"
+    file_path = os.path.join(UPLOAD_DIR, safe_filename)
+
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     # B. Extract data
     extracted = extract_pdf_data(file_path)
     meta = extracted["metadata"]
-    chunks = extracted["text_chunks"]
+    meta["filename"] = raw_basename  # Preserve human readable name in metadata
+    chunks_with_pages = extracted.get("chunks_with_pages") or extracted["text_chunks"]
 
     # C. Persist to database (link to authenticated user if logged in)
     db_record = create_document_record(
-        filename=meta["filename"],
+        filename=raw_basename,
         total_pages=meta["total_pages"],
         title=meta["title"],
         author=meta["author"],
-        chunks=chunks,
+        chunks=chunks_with_pages,
         user_email=current_user_email,
+        db=db,
     )
 
     # D. Add chunks to FAISS index
-    if chunks:
-        vstore.add_chunks(chunks, doc_id=db_record.id)
+    if chunks_with_pages:
+        vstore.add_chunks(chunks_with_pages, doc_id=db_record.id)
         vstore.save_index()
 
     return {
         "status": "success",
         "document_id": db_record.id,
-        "filename": meta["filename"],
+        "filename": raw_basename,
         "total_pages": meta["total_pages"],
-        "text_chunks_count": len(chunks),
+        "text_chunks_count": len(chunks_with_pages),
         "embedded_images_count": len(extracted["embedded_images"]),
         "tables_found_count": len(extracted["tables"]),
         "tables_data": extracted["tables"],
@@ -248,25 +257,40 @@ async def upload_pdf(
 # ===========================================================================
 
 @app.post("/chat/", summary="Ask AI a question about a PDF document (RAG Pipeline)")
-async def chat_with_pdf(req: ChatRequest):
+def chat_with_pdf(
+    req: ChatRequest,
+    current_user_email: str = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
     """
-    Mini RAG Pipeline:
+    Mini RAG Pipeline (runs in worker threadpool):
     1. Receive user question + optional document_id
-    2. Retrieve top-5 relevant text chunks from FAISS index
-    3. Build context-aware prompt with retrieved chunks
-    4. Send to Gemini AI and return structured answer with page citations
+    2. Resolve allowed document IDs for multi-tenant isolation
+    3. Retrieve top-5 relevant text chunks from FAISS index
+    4. Send context to Gemini AI and return structured answer with page citations
     """
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    # Step 1: Semantic search in FAISS
-    search_results = vstore.search(query=req.question, top_k=5, doc_id=req.document_id)
+    # Multi-tenant isolation: resolve allowed doc IDs for the user
+    allowed_doc_ids = None
+    if current_user_email:
+        user_docs = get_all_documents(user_email=current_user_email, db=db)
+        allowed_doc_ids = {d["id"] for d in user_docs}
+
+    # Step 1: Semantic search in FAISS with multi-tenant filtering
+    search_results = vstore.search(
+        query=req.question,
+        top_k=5,
+        doc_id=req.document_id,
+        allowed_doc_ids=allowed_doc_ids,
+    )
 
     # Step 2: Build context from retrieved chunks
     context_parts = []
     citations = []
     for i, result in enumerate(search_results):
-        context_parts.append(f"[Source {i+1}, Page ~{result.get('page_hint', '?')}]:\n{result['text']}")
+        context_parts.append(f"[Source {i+1}, Page {result.get('page_hint', '?')}]:\n{result['text']}")
         if result.get("page_hint"):
             citations.append({
                 "page": result["page_hint"],
@@ -330,16 +354,23 @@ async def chat_with_pdf(req: ChatRequest):
 # SEMANTIC SEARCH
 # ===========================================================================
 
-@app.get("/search/", summary="Semantic search across all indexed documents")
+@app.get("/search/", summary="Semantic search across indexed documents")
 def semantic_search(
     query: str = Query(..., description="Natural language search query"),
     top_k: int = 5,
+    current_user_email: str = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
 ):
-    """Searches FAISS index and returns top matching text chunks."""
+    """Searches FAISS index with multi-tenant filtering."""
     if not query.strip():
         raise HTTPException(status_code=400, detail="Search query cannot be empty.")
 
-    results = vstore.search(query=query, top_k=top_k)
+    allowed_doc_ids = None
+    if current_user_email:
+        user_docs = get_all_documents(user_email=current_user_email, db=db)
+        allowed_doc_ids = {d["id"] for d in user_docs}
+
+    results = vstore.search(query=query, top_k=top_k, allowed_doc_ids=allowed_doc_ids)
     return {
         "query": query,
         "results_count": len(results),
@@ -352,26 +383,44 @@ def semantic_search(
 # ===========================================================================
 
 @app.get("/documents/", summary="List all documents for the authenticated user")
-def list_documents(current_user_email: str = Depends(get_current_user_optional)):
+def list_documents(
+    current_user_email: str = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
     """Returns all uploaded documents. Filters by user if authenticated."""
-    return get_all_documents(user_email=current_user_email)
+    return get_all_documents(user_email=current_user_email, db=db)
 
 
 @app.get("/documents/{doc_id}", summary="Get details for a specific document")
-def get_document(doc_id: int):
+def get_document(doc_id: int, db: Session = Depends(get_db)):
     """Fetches document metadata and chunk count by ID."""
-    doc = get_document_by_id(doc_id)
+    doc = get_document_by_id(doc_id, db=db)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
     return doc
 
 
 @app.delete("/documents/{doc_id}", summary="Permanently delete a document")
-def delete_document(doc_id: int):
-    """Deletes document record, all associated chunks, and removes from FAISS."""
-    success = delete_document_record(doc_id)
-    if not success:
+def delete_document(
+    doc_id: int,
+    current_user_email: str = Depends(get_current_user_optional),
+    db: Session = Depends(get_db),
+):
+    """Deletes document record, purges vectors from FAISS, and removes disk files."""
+    doc = get_document_by_id(doc_id, db=db)
+    if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
+
+    if current_user_email and doc.get("user_id"):
+        user = get_user_by_email(current_user_email, db=db)
+        if user and doc["user_id"] != user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this document.")
+
+    deleted_doc = delete_document_record(doc_id, db=db)
+    if deleted_doc:
+        # Purge vector embeddings from FAISS
+        vstore.delete_document_vectors(doc_id)
+
     return {"status": "deleted", "document_id": doc_id}
 
 
@@ -412,4 +461,4 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

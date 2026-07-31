@@ -45,32 +45,43 @@ class VectorStore:
             embeddings.append(np.random.randn(self.dimension).astype(np.float32))
         return np.array(embeddings, dtype=np.float32)
 
-    def add_chunks(self, chunks: list[str], doc_id: int = 0):
+    def add_chunks(self, chunks: list[str] | list[dict], doc_id: int = 0):
         """
         Generates vector embeddings for text chunks and adds them to FAISS index.
-        Tracks which document and approximate page each chunk belongs to.
+        Tracks which document and page each chunk belongs to.
+        chunks can be a list of strings or list of dicts with {"text": ..., "page": ...}.
         """
         if not chunks:
             print("No chunks provided to index.")
             return
 
-        print(f"Generating embeddings for {len(chunks)} text chunks (doc_id={doc_id})...")
-        embeddings = self._get_embeddings(chunks)
+        text_list = []
+        page_list = []
+
+        for i, item in enumerate(chunks):
+            if isinstance(item, dict):
+                text_list.append(item.get("text", ""))
+                page_list.append(item.get("page", 1))
+            else:
+                text_list.append(str(item))
+                page_list.append(max(1, (i // 3) + 1))
+
+        print(f"Generating embeddings for {len(text_list)} text chunks (doc_id={doc_id})...")
+        embeddings = self._get_embeddings(text_list)
 
         self.index.add(embeddings)
-        self.chunks.extend(chunks)
+        self.chunks.extend(text_list)
 
-        # Estimate page number from chunk index (approx 3-4 chunks per page)
-        for i in range(len(chunks)):
+        for p in page_list:
             self.doc_ids.append(doc_id)
-            self.page_hints.append(max(1, (i // 3) + 1))
+            self.page_hints.append(p)
 
-        print(f" Added {len(chunks)} chunks to FAISS. Total vectors: {self.index.ntotal}")
+        print(f" Added {len(text_list)} chunks to FAISS. Total vectors: {self.index.ntotal}")
 
-    def search(self, query: str, top_k: int = 5, doc_id: int = None) -> list[dict]:
+    def search(self, query: str, top_k: int = 5, doc_id: int = None, allowed_doc_ids: set[int] | list[int] = None) -> list[dict]:
         """
         Searches FAISS for top_k most semantically similar chunks.
-        Optionally filters results to a specific document.
+        Supports filtering by specific doc_id or set of allowed_doc_ids for multi-tenant isolation.
         """
         if self.index.ntotal == 0:
             print("FAISS index is empty — no documents indexed yet.")
@@ -78,8 +89,11 @@ class VectorStore:
 
         query_vector = self._get_embeddings([query])
 
-        # Search more than top_k so we can filter by doc_id if needed
-        search_k = min(top_k * 3, self.index.ntotal) if doc_id is not None else top_k
+        # Convert allowed_doc_ids to set for fast lookup
+        allowed_set = set(allowed_doc_ids) if allowed_doc_ids is not None else None
+
+        # Fetch more candidates to account for filtering
+        search_k = min(top_k * 10, self.index.ntotal)
         distances, indices = self.index.search(query_vector, search_k)
 
         results = []
@@ -87,15 +101,21 @@ class VectorStore:
             if idx == -1 or idx >= len(self.chunks):
                 continue
 
-            # Filter by document if doc_id specified
-            if doc_id is not None and self.doc_ids[idx] != doc_id:
+            chunk_doc_id = self.doc_ids[idx] if idx < len(self.doc_ids) else 0
+
+            # Filter by explicit document if doc_id specified
+            if doc_id is not None and chunk_doc_id != doc_id:
+                continue
+
+            # Multi-tenant isolation: filter out chunks from documents not owned by the user
+            if allowed_set is not None and chunk_doc_id not in allowed_set:
                 continue
 
             results.append({
                 "chunk_id": int(idx),
                 "score": float(dist),
                 "text": self.chunks[idx],
-                "doc_id": self.doc_ids[idx] if idx < len(self.doc_ids) else 0,
+                "doc_id": chunk_doc_id,
                 "page_hint": self.page_hints[idx] if idx < len(self.page_hints) else 1,
             })
 
@@ -103,6 +123,43 @@ class VectorStore:
                 break
 
         return results
+
+    def delete_document_vectors(self, doc_id: int):
+        """
+        Removes all vectors belonging to doc_id and rebuilds the FAISS index cleanly.
+        """
+        if doc_id not in self.doc_ids:
+            return
+
+        print(f"Purging FAISS vectors for document ID: {doc_id}...")
+
+        # Filter out chunks for this doc_id
+        new_chunks = []
+        new_doc_ids = []
+        new_page_hints = []
+
+        for text, d_id, p_hint in zip(self.chunks, self.doc_ids, self.page_hints):
+            if d_id != doc_id:
+                new_chunks.append(text)
+                new_doc_ids.append(d_id)
+                new_page_hints.append(p_hint)
+
+        # Reset FAISS index
+        self.index = faiss.IndexFlatL2(self.dimension)
+        self.chunks = []
+        self.doc_ids = []
+        self.page_hints = []
+
+        # Re-add remaining vectors if any
+        if new_chunks:
+            embeddings = self._get_embeddings(new_chunks)
+            self.index.add(embeddings)
+            self.chunks = new_chunks
+            self.doc_ids = new_doc_ids
+            self.page_hints = new_page_hints
+
+        self.save_index()
+        print(f" Purged vectors for doc_id={doc_id}. Remaining vectors: {self.index.ntotal}")
 
     def save_index(self, index_path: str = "faiss_index.bin", meta_path: str = "chunks.npy"):
         """Saves FAISS index and chunk metadata to disk."""
