@@ -114,7 +114,8 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     Creates a new user account with a bcrypt-hashed password.
     Returns a JWT access token on success.
     """
-    if get_user_by_email(req.email, db=db):
+    email = req.email.strip().lower()
+    if get_user_by_email(email, db=db):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email already exists.",
@@ -128,7 +129,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     hashed = get_password_hash(req.password)
     user = create_user(
         username=req.username,
-        email=req.email,
+        email=email,
         hashed_password=hashed,
         db=db,
     )
@@ -153,7 +154,8 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     """
     Validates credentials and returns a JWT access token.
     """
-    user = get_user_by_email(req.email, db=db)
+    email = req.email.strip().lower()
+    user = get_user_by_email(email, db=db)
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
