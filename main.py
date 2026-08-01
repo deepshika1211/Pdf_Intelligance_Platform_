@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, status
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
@@ -56,7 +57,9 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",   # Vite dev server
         "http://localhost:3000",   # Alternative dev port
+        "http://localhost:3001",   # Current Vite dev server port
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:3001",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -467,9 +470,282 @@ def root():
 def health_check():
     return {
         "status": "ok",
-        "gemini_configured": bool(GEMINI_API_KEY),
+        "groq_configured": bool(GROQ_API_KEY),
         "faiss_vectors": vstore.index.ntotal,
     }
+
+# ===========================================================================
+# AI GENERATION ENDPOINTS (Flashcards, Quiz, Notes, Glossary, Insights, Summary)
+# ===========================================================================
+
+class AIGenerationRequest(BaseModel):
+    document_id: int
+    num_items: int = 10  # for flashcards/quiz
+
+
+def _get_doc_context(doc_id: int, db: Session, max_chunks: int = 8) -> str:
+    """Helper: fetch top chunks from a document to build AI context."""
+    chunks = get_document_chunks(doc_id, db=db)
+    if not chunks:
+        return ""
+    selected = chunks[:max_chunks]
+    return "\n\n".join([
+        f"[Chunk {c.get('chunk_index', '?')}]: {c.get('chunk_text', '')[:1000]}"
+        for c in selected
+    ])
+
+
+def _call_groq(prompt: str) -> str:
+    """Helper: call Groq API and return text."""
+    if not GROQ_API_KEY:
+        return "AI not configured. Please set GROQ_API_KEY."
+    try:
+        resp = http_requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2048,
+                "temperature": 0.4,
+            },
+            timeout=45,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+    except Exception as e:
+        return f"AI generation error: {str(e)}"
+
+
+@app.post("/ai/summary", summary="Generate real AI summary for a document")
+def generate_summary(req: AIGenerationRequest, db: Session = Depends(get_db)):
+    doc = get_document_by_id(req.document_id, db=db)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    context = _get_doc_context(req.document_id, db=db)
+    if not context:
+        raise HTTPException(status_code=400, detail="Document has no indexed content.")
+    prompt = f"""You are an expert document analyst. Provide a comprehensive summary of this document.
+
+DOCUMENT CONTENT:
+{context}
+
+Provide:
+1. Executive Summary (2-3 sentences)
+2. Key Topics (bullet list)
+3. Main Conclusions
+4. Target Audience
+
+Format with clear headings."""
+    summary = _call_groq(prompt)
+    return {"document_id": req.document_id, "summary": summary, "document_name": doc.get("filename", "")}
+
+
+@app.post("/ai/flashcards", summary="Generate flashcards from a document")
+def generate_flashcards(req: AIGenerationRequest, db: Session = Depends(get_db)):
+    doc = get_document_by_id(req.document_id, db=db)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    context = _get_doc_context(req.document_id, db=db)
+    if not context:
+        raise HTTPException(status_code=400, detail="Document has no indexed content.")
+    num = min(req.num_items, 20)
+    prompt = f"""Generate exactly {num} flashcards from this document for studying.
+
+DOCUMENT:
+{context}
+
+Return a JSON array ONLY (no markdown, no explanation) in this exact format:
+[
+  {{"front": "Question or term here", "back": "Answer or definition here"}},
+  ...
+]"""
+    raw = _call_groq(prompt)
+    import json, re
+    try:
+        # Extract JSON array from response
+        match = re.search(r'\[.*\]', raw, re.DOTALL)
+        cards = json.loads(match.group(0)) if match else []
+    except Exception:
+        cards = [{"front": "Error parsing flashcards", "back": raw[:200]}]
+    return {"document_id": req.document_id, "flashcards": cards, "count": len(cards)}
+
+
+@app.post("/ai/quiz", summary="Generate a quiz from a document")
+def generate_quiz(req: AIGenerationRequest, db: Session = Depends(get_db)):
+    doc = get_document_by_id(req.document_id, db=db)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    context = _get_doc_context(req.document_id, db=db)
+    if not context:
+        raise HTTPException(status_code=400, detail="Document has no indexed content.")
+    num = min(req.num_items, 15)
+    prompt = f"""Generate exactly {num} multiple-choice quiz questions from this document.
+
+DOCUMENT:
+{context}
+
+Return a JSON array ONLY (no markdown, no explanation):
+[
+  {{
+    "question": "Question text",
+    "options": ["A) Option 1", "B) Option 2", "C) Option 3", "D) Option 4"],
+    "correct": "A",
+    "explanation": "Brief explanation why"
+  }},
+  ...
+]"""
+    raw = _call_groq(prompt)
+    import json, re
+    try:
+        match = re.search(r'\[.*\]', raw, re.DOTALL)
+        questions = json.loads(match.group(0)) if match else []
+    except Exception:
+        questions = []
+    return {"document_id": req.document_id, "questions": questions, "count": len(questions)}
+
+
+@app.post("/ai/revision-notes", summary="Generate revision notes from a document")
+def generate_revision_notes(req: AIGenerationRequest, db: Session = Depends(get_db)):
+    doc = get_document_by_id(req.document_id, db=db)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    context = _get_doc_context(req.document_id, db=db)
+    if not context:
+        raise HTTPException(status_code=400, detail="Document has no indexed content.")
+    prompt = f"""Create comprehensive revision notes for this document. Format as structured notes a student would use.
+
+DOCUMENT:
+{context}
+
+Include:
+- Key concepts with definitions
+- Important facts and figures
+- Relationships between concepts
+- Memorable mnemonics where applicable
+
+Use clear headings (##), bullet points, and bold for key terms."""
+    notes = _call_groq(prompt)
+    return {"document_id": req.document_id, "notes": notes}
+
+
+@app.post("/ai/glossary", summary="Generate a glossary of terms from a document")
+def generate_glossary(req: AIGenerationRequest, db: Session = Depends(get_db)):
+    doc = get_document_by_id(req.document_id, db=db)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    context = _get_doc_context(req.document_id, db=db)
+    if not context:
+        raise HTTPException(status_code=400, detail="Document has no indexed content.")
+    prompt = f"""Extract all important terms, concepts, and acronyms from this document and provide clear definitions.
+
+DOCUMENT:
+{context}
+
+Return a JSON array ONLY (no markdown, no explanation):
+[
+  {{"term": "Term name", "definition": "Clear definition", "category": "technical|general|acronym"}},
+  ...
+]
+Sort alphabetically by term."""
+    raw = _call_groq(prompt)
+    import json, re
+    try:
+        match = re.search(r'\[.*\]', raw, re.DOTALL)
+        terms = json.loads(match.group(0)) if match else []
+    except Exception:
+        terms = []
+    return {"document_id": req.document_id, "glossary": terms, "count": len(terms)}
+
+
+@app.post("/ai/insights", summary="Generate AI insights and analysis for a document")
+def generate_insights(req: AIGenerationRequest, db: Session = Depends(get_db)):
+    doc = get_document_by_id(req.document_id, db=db)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    context = _get_doc_context(req.document_id, db=db)
+    if not context:
+        raise HTTPException(status_code=400, detail="Document has no indexed content.")
+    prompt = f"""Provide deep AI insights and analysis for this document.
+
+DOCUMENT:
+{context}
+
+Return a JSON object ONLY (no markdown):
+{{
+  "key_themes": ["theme1", "theme2", "theme3"],
+  "sentiment": "positive|neutral|negative|mixed",
+  "complexity": "beginner|intermediate|advanced|expert",
+  "document_type": "research|report|manual|legal|financial|educational|other",
+  "key_statistics": ["stat1", "stat2"],
+  "action_items": ["action1", "action2"],
+  "strengths": ["strength1", "strength2"],
+  "gaps": ["gap1", "gap2"],
+  "overall_summary": "2-3 sentence overall assessment"
+}}"""
+    raw = _call_groq(prompt)
+    import json, re
+    try:
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        insights = json.loads(match.group(0)) if match else {}
+    except Exception:
+        insights = {"overall_summary": raw[:500]}
+    return {"document_id": req.document_id, "insights": insights}
+
+
+@app.post("/ai/compare", summary="Compare two PDF documents using AI")
+def compare_documents(document_id_1: int, document_id_2: int, db: Session = Depends(get_db)):
+    doc1 = get_document_by_id(document_id_1, db=db)
+    doc2 = get_document_by_id(document_id_2, db=db)
+    if not doc1 or not doc2:
+        raise HTTPException(status_code=404, detail="One or both documents not found.")
+    ctx1 = _get_doc_context(document_id_1, db=db, max_chunks=5)
+    ctx2 = _get_doc_context(document_id_2, db=db, max_chunks=5)
+    prompt = f"""Compare these two documents thoroughly.
+
+DOCUMENT 1 ({doc1.get('filename','Doc 1')}):
+{ctx1}
+
+DOCUMENT 2 ({doc2.get('filename','Doc 2')}):
+{ctx2}
+
+Provide:
+## Similarities
+- Key common themes and content
+
+## Differences
+- How they differ in content, scope, depth
+
+## Document 1 Strengths
+- What Doc 1 covers better
+
+## Document 2 Strengths
+- What Doc 2 covers better
+
+## Recommendation
+- Which to read first, or which is more comprehensive for what purpose"""
+    comparison = _call_groq(prompt)
+    return {
+        "document_1": {"id": document_id_1, "name": doc1.get("filename", "")},
+        "document_2": {"id": document_id_2, "name": doc2.get("filename", "")},
+        "comparison": comparison,
+    }
+
+
+@app.get("/documents/{doc_id}/download", summary="Download original PDF file")
+def download_pdf(doc_id: int, db: Session = Depends(get_db)):
+    """Serves the original uploaded PDF file for download."""
+    from fastapi.responses import FileResponse
+    doc = get_document_by_id(doc_id, db=db)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    filename = doc.get("filename", "document.pdf")
+    # Search uploads folder for this file
+    for fname in os.listdir(UPLOAD_DIR):
+        if filename in fname:  # UUID prefix + original name
+            fpath = os.path.join(UPLOAD_DIR, fname)
+            return FileResponse(fpath, media_type="application/pdf", filename=filename)
+    raise HTTPException(status_code=404, detail="PDF file not found on disk.")
 
 
 if __name__ == "__main__":

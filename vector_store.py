@@ -92,8 +92,12 @@ class VectorStore:
         # Convert allowed_doc_ids to set for fast lookup
         allowed_set = set(allowed_doc_ids) if allowed_doc_ids is not None else None
 
-        # Fetch more candidates to account for filtering
-        search_k = min(top_k * 10, self.index.ntotal)
+        # Fetch more candidates to account for filtering.
+        # If filtering is active, we search the entire index to ensure we don't miss chunks from smaller documents.
+        is_filtering = (doc_id is not None or allowed_doc_ids is not None)
+        search_k = self.index.ntotal if is_filtering else min(top_k * 10, self.index.ntotal)
+        if search_k <= 0:
+            return []
         distances, indices = self.index.search(query_vector, search_k)
 
         results = []

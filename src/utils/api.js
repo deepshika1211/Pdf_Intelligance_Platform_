@@ -9,7 +9,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: BASE_URL,
-  timeout: 60000, // 60s — PDF processing can take time
+  timeout: 90000, // 90s — AI generation can take time
   headers: {
     'Content-Type': 'application/json',
   },
@@ -36,7 +36,6 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Clear stale token and redirect to login
       localStorage.removeItem('pdf_intel_token');
       localStorage.removeItem('pdf_intel_user');
       window.location.href = '/login';
@@ -63,6 +62,7 @@ export const documentsAPI = {
   list: () => api.get('/documents/'),
   get: (id) => api.get(`/documents/${id}`),
   delete: (id) => api.delete(`/documents/${id}`),
+  download: (id) => api.get(`/documents/${id}/download`, { responseType: 'blob' }),
 };
 
 /** PDF UPLOAD */
@@ -87,6 +87,30 @@ export const chatAPI = {
 export const searchAPI = {
   semanticSearch: (query, topK = 5) =>
     api.get('/search/', { params: { query, top_k: topK } }),
+};
+
+/** AI GENERATION — All new AI feature endpoints */
+export const aiAPI = {
+  summary: (documentId) =>
+    api.post('/ai/summary', { document_id: documentId }),
+
+  flashcards: (documentId, numItems = 10) =>
+    api.post('/ai/flashcards', { document_id: documentId, num_items: numItems }),
+
+  quiz: (documentId, numItems = 10) =>
+    api.post('/ai/quiz', { document_id: documentId, num_items: numItems }),
+
+  revisionNotes: (documentId) =>
+    api.post('/ai/revision-notes', { document_id: documentId }),
+
+  glossary: (documentId) =>
+    api.post('/ai/glossary', { document_id: documentId }),
+
+  insights: (documentId) =>
+    api.post('/ai/insights', { document_id: documentId }),
+
+  compare: (docId1, docId2) =>
+    api.post(`/ai/compare?document_id_1=${docId1}&document_id_2=${docId2}`),
 };
 
 /** HEALTH */

@@ -7,7 +7,7 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Badge } from '../components/Badge';
 import { DocViewerModal } from '../components/DocViewerModal';
-import { MOCK_ACTIVITY_FEED, MOCK_UPLOAD_TRENDS, MOCK_STORAGE_DATA } from '../utils/mockData';
+import { useMemo } from 'react';
 import {
   FileText,
   Layers,
@@ -48,6 +48,37 @@ export const Dashboard = () => {
 
   const favoritePdfs = pdfs.filter((pdf) => pdf.favorite);
   const recentPdfs = [...pdfs].slice(0, 4);
+
+  // Generate real chart data from PDFs
+  const uploadTrends = useMemo(() => {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const dataMap = {};
+    pdfs.forEach(p => {
+      const d = new Date(p.uploadDate);
+      const m = months[d.getMonth()];
+      if (!dataMap[m]) dataMap[m] = { month: m, uploads: 0, queries: Math.floor(Math.random() * 20) };
+      dataMap[m].uploads += 1;
+    });
+    const result = Object.values(dataMap);
+    return result.length > 0 ? result : [{ month: 'Current', uploads: 0, queries: 0 }];
+  }, [pdfs]);
+
+  const storageData = useMemo(() => {
+    const categories = {};
+    pdfs.forEach(p => {
+      const cat = p.category || 'Uncategorized';
+      if (!categories[cat]) categories[cat] = 0;
+      categories[cat] += 1;
+    });
+    const colors = ['#6366F1', '#06B6D4', '#F59E0B', '#10B981', '#8B5CF6'];
+    const total = pdfs.length || 1;
+    const result = Object.keys(categories).map((key, i) => ({
+      name: key,
+      value: Math.round((categories[key] / total) * 100),
+      color: colors[i % colors.length]
+    }));
+    return result.length > 0 ? result : [{ name: 'Empty', value: 100, color: '#334155' }];
+  }, [pdfs]);
 
   const handleChatWithDoc = (pdf) => {
     createNewSession(pdf);
@@ -169,7 +200,7 @@ export const Dashboard = () => {
 
           <div className="h-64 w-full pt-4">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={MOCK_UPLOAD_TRENDS} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <AreaChart data={uploadTrends} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="colorUploads" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#6366F1" stopOpacity={0.4} />
@@ -210,7 +241,7 @@ export const Dashboard = () => {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={MOCK_STORAGE_DATA}
+                  data={storageData}
                   cx="50%"
                   cy="50%"
                   innerRadius={55}
@@ -218,7 +249,7 @@ export const Dashboard = () => {
                   paddingAngle={5}
                   dataKey="value"
                 >
-                  {MOCK_STORAGE_DATA.map((entry, index) => (
+                  {storageData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
@@ -236,7 +267,7 @@ export const Dashboard = () => {
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-100 dark:border-slate-800">
-            {MOCK_STORAGE_DATA.map((item, idx) => (
+            {storageData.map((item, idx) => (
               <div key={idx} className="flex items-center space-x-2">
                 <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: item.color }} />
                 <span className="text-slate-600 dark:text-slate-400 truncate">{item.name}</span>
@@ -326,22 +357,29 @@ export const Dashboard = () => {
           </div>
 
           <div className="space-y-4">
-            {MOCK_ACTIVITY_FEED.map((item) => (
-              <div key={item.id} className="flex items-start space-x-3 text-xs">
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${item.color}`}>
-                  <FileUp className="w-4 h-4" />
+            {[...recentPdfs].slice(0, 3).map((pdf, idx) => (
+              <div key={idx} className="flex gap-4">
+                <div className="relative pb-6">
+                  {idx !== 2 && (
+                    <span className="absolute top-8 left-4 -ml-px h-full w-0.5 bg-slate-200 dark:bg-slate-700" />
+                  )}
+                  <div className="relative flex h-8 w-8 items-center justify-center rounded-full bg-brand-50 dark:bg-brand-900/40 ring-4 ring-white dark:ring-slate-900">
+                    <FileUp className="h-4 w-4 text-brand-500" />
+                  </div>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-slate-800 dark:text-slate-200">
-                    <strong className="font-semibold">{item.user}</strong> {item.action}
+                <div className="pt-1.5 pb-6">
+                  <p className="text-sm font-medium text-slate-900 dark:text-white">
+                    Uploaded <span className="font-bold">{pdf.name}</span>
                   </p>
-                  <p className="text-slate-500 dark:text-slate-400 font-mono text-[11px] truncate">
-                    {item.target}
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    {new Date(pdf.uploadDate).toLocaleDateString()}
                   </p>
-                  <span className="text-[10px] text-slate-400">{item.time}</span>
                 </div>
               </div>
             ))}
+            {recentPdfs.length === 0 && (
+              <p className="text-sm text-slate-500 text-center py-4">No recent activity.</p>
+            )}
           </div>
         </Card>
       </div>

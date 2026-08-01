@@ -111,11 +111,20 @@ export const Settings = () => {
       {activeTab === 'profile' && (
         <Card className="p-6 space-y-6">
           <div className="flex items-center space-x-4">
-            <img
-              src={user?.avatar}
-              alt={user?.name}
-              className="w-16 h-16 rounded-2xl object-cover ring-4 ring-brand-500/20"
-            />
+            {user?.avatar ? (
+              <img
+                src={user.avatar}
+                alt={user?.name}
+                className="w-16 h-16 rounded-2xl object-cover ring-4 ring-brand-500/20"
+              />
+            ) : (
+              <div
+                className="w-16 h-16 rounded-2xl ring-4 ring-brand-500/20 flex items-center justify-center font-bold text-2xl text-white"
+                style={{ background: 'linear-gradient(135deg, #FF4400, #F4AE52)' }}
+              >
+                {(user?.name || user?.username || '?').charAt(0).toUpperCase()}
+              </div>
+            )}
             <div>
               <h3 className="font-bold text-lg text-slate-900 dark:text-white">{user?.name}</h3>
               <p className="text-xs text-slate-500">{user?.role} • {user?.plan}</p>
