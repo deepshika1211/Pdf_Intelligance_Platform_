@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -14,9 +14,11 @@ import {
   Settings,
   LogOut,
   ChevronDown,
-  X
+  X,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { searchAPI } from '../utils/api';
 
 export const Navbar = ({ onMobileMenuToggle }) => {
   const { isDark, toggleTheme } = useTheme();
@@ -28,12 +30,31 @@ export const Navbar = ({ onMobileMenuToggle }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserDropdown, setShowUserDropdown] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
+  
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
 
-  const filteredPdfs = pdfs.filter(
-    (pdf) =>
-      pdf.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      pdf.category?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Semantic search debounced
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    const delay = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const res = await searchAPI.semanticSearch(searchQuery);
+        setSearchResults(res.data.results || []);
+      } catch (e) {
+        console.error('Search error', e);
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(delay);
+  }, [searchQuery]);
 
   return (
     <header className="sticky top-0 z-40 w-full glass-panel border-b border-slate-200/80 dark:border-slate-800/80">
@@ -53,9 +74,35 @@ export const Navbar = ({ onMobileMenuToggle }) => {
             onClick={() => navigate('/')}
             className="flex items-center space-x-2.5 cursor-pointer group"
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-500 via-purpleBrand-500 to-cyanBrand-500 p-0.5 shadow-md shadow-brand-500/20 group-hover:scale-105 transition-transform duration-200">
-              <div className="w-full h-full bg-slate-900 rounded-[10px] flex items-center justify-center">
-                <Sparkles className="w-5 h-5 text-cyanBrand-400 animate-pulse-slow" />
+            {/* Logo Icon — fully inline styled for reliability */}
+            <div style={{
+              width: 40,
+              height: 40,
+              borderRadius: 12,
+              background: 'linear-gradient(135deg, #FF4400 0%, #F4AE52 50%, #C1EBE9 100%)',
+              padding: 2,
+              boxShadow: '0 4px 14px rgba(244,174,82,0.4)',
+              flexShrink: 0,
+              transition: 'transform 0.2s',
+            }}
+              className="group-hover:scale-105"
+            >
+              <div style={{
+                width: '100%',
+                height: '100%',
+                borderRadius: 10,
+                background: '#0A1728',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" fill="#F4AE52" fillOpacity="0.3" stroke="#F4AE52" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M14 2v6h6" stroke="#F4AE52" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M9 13h6M9 17h4" stroke="#C1EBE9" strokeWidth="1.5" strokeLinecap="round"/>
+                  <circle cx="18" cy="18" r="4" fill="#FF4400"/>
+                  <path d="M18 16v2l1 1" stroke="white" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
               </div>
             </div>
             <div className="hidden sm:block">
@@ -63,7 +110,7 @@ export const Navbar = ({ onMobileMenuToggle }) => {
                 <span className="font-extrabold text-base tracking-tight text-slate-900 dark:text-white">
                   PDF<span className="gradient-text">Intel</span>
                 </span>
-                <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-brand-100 dark:bg-brand-950/80 text-brand-600 dark:text-brand-300 border border-brand-200 dark:border-brand-800">
+                <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(244,174,82,0.15)', color: '#FF4400', border: '1px solid rgba(244,174,82,0.4)' }}>
                   AI v2.4
                 </span>
               </div>
@@ -74,19 +121,78 @@ export const Navbar = ({ onMobileMenuToggle }) => {
 
         {/* Center: Search Bar */}
         <div className="flex-1 max-w-md hidden md:block">
-          <div className="relative">
+          <div className="relative z-50">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Search documents, AI summaries, tags... (Press '/' to focus)"
+              placeholder="Search documents semantically..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setShowSearchModal(true);
+              }}
               onFocus={() => setShowSearchModal(true)}
               className="w-full pl-10 pr-12 py-2 text-sm bg-slate-100/70 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500 focus:bg-white dark:focus:bg-slate-900 transition-all text-slate-800 dark:text-slate-200 placeholder-slate-400"
             />
-            <kbd className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-slate-200 dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600">
-              /
-            </kbd>
+            {isSearching && (
+              <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-brand-500" />
+            )}
+            {!isSearching && !searchQuery && (
+              <kbd className="absolute right-3 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-slate-200 dark:bg-slate-700 rounded border border-slate-300 dark:border-slate-600">
+                /
+              </kbd>
+            )}
+
+            {/* Dropdown Results */}
+            <AnimatePresence>
+              {showSearchModal && searchQuery && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowSearchModal(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    className="absolute top-full mt-2 w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl overflow-hidden z-50 max-h-96 overflow-y-auto"
+                  >
+                    {isSearching ? (
+                      <div className="p-4 text-sm text-center text-slate-500">Searching AI index...</div>
+                    ) : searchResults.length > 0 ? (
+                      <div className="py-2">
+                        <div className="px-3 pb-2 text-xs font-semibold text-brand-500 border-b border-slate-100 dark:border-slate-800">
+                          Semantic Results
+                        </div>
+                        {searchResults.map((res, i) => (
+                          <div
+                            key={i}
+                            onClick={() => {
+                              navigate('/chat');
+                              setShowSearchModal(false);
+                            }}
+                            className="px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/50 cursor-pointer border-b border-slate-100 dark:border-slate-800/50 last:border-0"
+                          >
+                            <div className="flex items-center space-x-2">
+                              <FileText className="w-4 h-4 text-slate-400" />
+                              <span className="text-sm font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                {res.document_name || 'Document'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1 line-clamp-2 italic">
+                              "...{res.text}..."
+                            </p>
+                            <div className="mt-1 flex items-center justify-between text-[10px] text-slate-400">
+                              <span>Page {res.page_number}</span>
+                              <span className="text-emerald-500">{(res.score * 100).toFixed(0)}% Match</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="p-4 text-sm text-center text-slate-500">No semantic matches found.</div>
+                    )}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
@@ -170,11 +276,20 @@ export const Navbar = ({ onMobileMenuToggle }) => {
               onClick={() => setShowUserDropdown(!showUserDropdown)}
               className="flex items-center space-x-2.5 p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
-              <img
-                src={user?.avatar}
-                alt={user?.name}
-                className="w-8 h-8 rounded-lg object-cover ring-2 ring-brand-500/30"
-              />
+              {user?.avatar ? (
+                <img
+                  src={user.avatar}
+                  alt={user?.name}
+                  className="w-8 h-8 rounded-lg object-cover ring-2 ring-brand-500/30"
+                />
+              ) : (
+                <div
+                  className="w-8 h-8 rounded-lg ring-2 ring-brand-500/30 flex items-center justify-center font-bold text-xs text-white"
+                  style={{ background: 'linear-gradient(135deg, #FF4400, #F4AE52)' }}
+                >
+                  {(user?.name || user?.username || '?').charAt(0).toUpperCase()}
+                </div>
+              )}
               <span className="hidden sm:inline font-semibold text-sm text-slate-700 dark:text-slate-200 max-w-[100px] truncate">
                 {user?.name}
               </span>

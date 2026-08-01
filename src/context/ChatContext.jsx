@@ -9,9 +9,35 @@ import { chatAPI } from '../utils/api';
 const ChatContext = createContext();
 
 export const ChatProvider = ({ children }) => {
-  const [sessions, setSessions] = useState([]);
-  const [activeSessionId, setActiveSessionId] = useState(null);
-  const [isTyping, setIsTyping] = useState(false);
+  // Initialize a default chat session on first load
+const initSession = {
+  id: `chat-${Date.now()}`,
+  pdfId: null,
+  pdfDbId: null,
+  pdfName: 'General Document',
+  title: 'New AI Session',
+  date: 'Just now',
+  messages: [
+    {
+      id: `msg-start-${Date.now()}`,
+      sender: 'ai',
+      text: `Hello! I'm your AI document assistant. Upload a PDF and I'll index it for semantic question answering with exact page citations.`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      citations: [],
+    },
+  ],
+};
+const [sessions, setSessions] = useState([initSession]);
+const [activeSessionId, setActiveSessionId] = useState(initSession.id);
+const [isTyping, setIsTyping] = useState(false);
+  // Initialize a default session on first load
+  React.useEffect(() => {
+    if (sessions.length === 0) {
+      const newId = createNewSession(null);
+      setActiveSessionId(newId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const activeSession = sessions.find((s) => s.id === activeSessionId) || sessions[0] || null;
 
